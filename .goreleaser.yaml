@@ -1,0 +1,16 @@
+version: 2
+builds:
+  - id: claude-split
+    main: .
+    binary: claude-split
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+brews:
+  # Requires a `bcostea/homebrew-tap` repo to exist before a publishing release.
+  # Until then, run goreleaser with --skip=publish to build only.
+  - name: claude-split
+    repository:
+      owner: bcostea
+      name: homebrew-tap
+    description: "Manage multiple isolated Claude Code profiles"
+    license: MIT
