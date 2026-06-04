@@ -3,14 +3,29 @@ builds:
   - id: claude-split
     main: .
     binary: claude-split
+    env:
+      - CGO_ENABLED=0
     goos: [darwin, linux]
     goarch: [amd64, arm64]
-brews:
-  # Requires a `bcostea/homebrew-tap` repo to exist before a publishing release.
-  # Until then, run goreleaser with --skip=publish to build only.
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+homebrew_casks:
   - name: claude-split
+    binary: claude-split
+    homepage: "https://github.com/bcostea/claude-split"
+    description: "Manage multiple isolated Claude Code profiles, each with its own config and login"
     repository:
       owner: bcostea
-      name: homebrew-tap
-    description: "Manage multiple isolated Claude Code profiles"
-    license: MIT
+      name: homebrew-claude-tools
+      # PAT with write access to the tap repo, provided in CI as a secret.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    hooks:
+      post:
+        # The binary is unsigned; strip the quarantine flag so macOS runs it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/claude-split"]
+          end

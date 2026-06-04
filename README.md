@@ -4,6 +4,14 @@ Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profile
 
 ## Install
 
+Homebrew (macOS):
+
+```sh
+brew install bcostea/claude-tools/claude-split
+```
+
+Go (any platform):
+
 ```sh
 go install github.com/bcostea/claude-split@latest
 ```
