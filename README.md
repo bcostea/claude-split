@@ -53,7 +53,7 @@ explicit --split  >  folder's last-used split  >  global default  >  prompt
 
 - **Folder memory.** Launching a split explicitly (`--split <name>`) from a project folder records that the folder uses that split. A later bare `claude-split` in the same folder auto-loads it. The map lives in `${XDG_CONFIG_HOME:-~/.config}/claude-split/folders.json`, keyed by canonical absolute path. Only explicit choices are recorded — including `--split default`, which pins a folder to your home profile — and an entry self-prunes if its split is removed, falling back to the global default.
 - **Global default.** Set with `--split-default <name>`; applies in any folder without its own remembered split.
-- **Prompt.** With no selection and no default, `claude-split` lists the available splits and exits rather than guessing.
+- **Select.** With no selection and no default, an interactive menu appears — arrow keys (or `j`/`k`) to move, `Enter` to choose, `q`/`Ctrl-C` to cancel. It lists the home profile, every split with its token status, and a `+ new split…` entry that creates and authenticates a split on the spot. Your choice is remembered for the folder, so the menu does not reappear there. In a non-interactive session (pipe, CI, `-p`) it instead prints the list and exits.
 
 ## Don't run splits from your home directory
 

@@ -1,16 +1,22 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
+
+	"golang.org/x/term"
 
 	"github.com/bcostea/claude-split/internal/args"
 	"github.com/bcostea/claude-split/internal/folders"
 	"github.com/bcostea/claude-split/internal/launcher"
 	"github.com/bcostea/claude-split/internal/registry"
 	"github.com/bcostea/claude-split/internal/resolve"
+	"github.com/bcostea/claude-split/internal/selector"
 	"github.com/bcostea/claude-split/internal/token"
 )
 
@@ -193,10 +199,18 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 	}
 
 	if d.Action == resolve.PrintListExit {
-		fmt.Fprintln(os.Stderr, "No split selected. Available:")
-		cmdList(reg, store)
-		fmt.Fprintln(os.Stderr, "\nRe-run with --split <name> ('default' = home profile), or set one: --split-default <name>.")
-		return 1
+		if !interactiveTTY() {
+			fmt.Fprintln(os.Stderr, "No split selected. Available:")
+			cmdList(reg, store)
+			fmt.Fprintln(os.Stderr, "\nRe-run with --split <name> ('default' = home profile), or set one: --split-default <name>.")
+			return 1
+		}
+		chosen, code, ok := runSelector(reg, store, baseDir)
+		if !ok {
+			return code
+		}
+		p.Split, p.SplitSet = chosen, true
+		d = resolve.Resolve(chosen, true, effDefault, reg.Splits)
 	}
 
 	var configDir, tok string
@@ -238,6 +252,68 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 		return 1
 	}
 	return 0 // unreachable on success (process replaced)
+}
+
+// interactiveTTY reports whether stdin and stderr are both terminals, which is
+// required to draw and drive the selector.
+func interactiveTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// runSelector shows the interactive menu and returns the chosen split name
+// (creating it first when the user picks "new split"). ok is false when the
+// caller should just exit with the returned code (cancel or creation failure).
+func runSelector(reg *registry.Registry, store token.Store, baseDir string) (chosen string, code int, ok bool) {
+	items := []selector.Item{{Name: "default", Label: "default (home)"}}
+	for _, s := range reg.Splits {
+		status := "no token"
+		if _, err := store.Load(s); err == nil {
+			status = "ok"
+		}
+		items = append(items, selector.Item{Name: s, Label: s, Status: status})
+	}
+
+	fmt.Fprintln(os.Stderr, "Select a split (↑/↓, Enter, q to cancel):")
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return "", 1, false
+	}
+	res, rerr := selector.Run(os.Stdin, os.Stderr, items)
+	_ = term.Restore(fd, oldState)
+	fmt.Fprintln(os.Stderr)
+
+	if rerr != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", rerr)
+		return "", 1, false
+	}
+	switch res.Kind {
+	case selector.Cancel:
+		fmt.Fprintln(os.Stderr, "No split selected.")
+		return "", 1, false
+	case selector.New:
+		name := promptName(os.Stderr, os.Stdin)
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "claude-split: no name entered")
+			return "", 1, false
+		}
+		if c := cmdNew(reg, store, baseDir, name); c != 0 {
+			return "", c, false
+		}
+		return name, 0, true
+	default: // selector.Pick
+		return res.Name, 0, true
+	}
+}
+
+func promptName(out io.Writer, in io.Reader) string {
+	fmt.Fprint(out, "New split name: ")
+	sc := bufio.NewScanner(in)
+	if sc.Scan() {
+		return strings.TrimSpace(sc.Text())
+	}
+	return ""
 }
 
 // effectiveDefault returns the default split to feed into resolution for the
