@@ -1,40 +1,65 @@
 # claude-split
 
-Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from one install and one subscription. `claude-split` wraps the real `claude`, selects a split, and forwards every other argument unchanged.
+Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from one install and one subscription. `claude-split` wraps the real `claude`: it selects a split, sets up its isolated config and authentication, and forwards every other argument through unchanged.
 
-## How it works
+## Install
 
-Each split is a self-contained directory at `~/.claude-splits/<name>/` selected via `CLAUDE_CONFIG_DIR`, with its own long-lived auth token injected as `CLAUDE_CODE_OAUTH_TOKEN`. The home profile (`~/.claude.json`, `~/.claude/`) is the implicit `default` split and is never modified.
+```sh
+go install github.com/bcostea/claude-split@latest
+```
 
-### Don't run splits from your home directory
+Or build from source: clone the repo and run `make build` (the binary lands at `bin/claude-split`).
 
-`CLAUDE_CONFIG_DIR` isolates only *user-scope* config. Claude Code also loads *project-scope* config from `<cwd>/.claude/` (settings, `statusLine`, hooks, skills, `CLAUDE.md`), and that is **not** affected by `CLAUDE_CONFIG_DIR`. When your working directory is your home directory, `<cwd>/.claude` *is* `~/.claude`, so your default profile's settings and skills leak into the split and defeat isolation.
+## Quick start
 
-Because of this, `claude-split` treats the home directory as always-default: an explicit `--split <name>` launched from `$HOME` is refused (run it from a project directory instead), and a configured-default split is silently downgraded to the home profile there. Set `CLAUDE_SPLIT_ALLOW_HOME=1` to override.
+```sh
+# Create a split and authenticate it (opens the login flow once)
+claude-split --split-new work
 
-## Usage
+# Use it inside a project — this also remembers the choice for this folder
+cd ~/code/project && claude-split --split work
+
+# Later, in the same folder, a bare invocation auto-loads the remembered split
+cd ~/code/project && claude-split
+```
+
+## Commands
 
 | Command | What it does |
 |---|---|
-| `claude-split [claude args...]` | Launch the resolved split (explicit `--split` > configured default > prompt) |
+| `claude-split [claude args...]` | Launch the resolved split and pass all arguments through to `claude` |
 | `claude-split --split <name> ...` | Launch a specific split |
 | `claude-split --split-list` | List splits, the default, and token status |
 | `claude-split --split-new <name>` | Create a split and authenticate it |
-| `claude-split --split-default <name>` | Set the auto-default (`default` = home profile) |
+| `claude-split --split-default <name>` | Set the global default (`default` = home profile) |
 | `claude-split --split-rm <name>` | Remove a split |
 | `claude-split --split-which` | Show which split would be launched |
 
-All arguments other than the `--split*` flags above are passed through to `claude` untouched.
+Every argument other than the `--split*` flags is passed to `claude` untouched.
 
-### Per-folder memory
+## How splits work
 
-When you launch a split explicitly (`--split <name>`) from a project folder, `claude-split` remembers that folder used that split. The next time you run a bare `claude-split` (no `--split`) in the same folder, it auto-loads that split. The resolution order is:
+Each split is a self-contained directory at `~/.claude-splits/<name>/` holding its own `.claude.json`, `.claude/` state, and a long-lived auth token. `claude-split` selects one by pointing `CLAUDE_CONFIG_DIR` at its directory and injecting the token as `CLAUDE_CODE_OAUTH_TOKEN`, then `exec`s the real `claude`. The home profile (`~/.claude.json`, `~/.claude/`) is the implicit `default` split and is never modified, so running `claude` directly behaves exactly as before.
+
+Because each split authenticates separately, you log in once per split — all against the same subscription. On macOS each split's token is stored as its own Keychain item; elsewhere it is a `0600` file inside the split directory.
+
+## Choosing which split runs
+
+When no `--split` is given, `claude-split` resolves the target in this order:
 
 ```
 explicit --split  >  folder's last-used split  >  global default  >  prompt
 ```
 
-So folder memory overrides the global default for that folder. The mapping lives in `${XDG_CONFIG_HOME:-~/.config}/claude-split/folders.json`. Only an explicit `--split` is recorded (including `--split default` to pin a folder to your home profile); if a remembered split is later removed, the entry self-prunes and resolution falls back to the global default.
+- **Folder memory.** Launching a split explicitly (`--split <name>`) from a project folder records that the folder uses that split. A later bare `claude-split` in the same folder auto-loads it. The map lives in `${XDG_CONFIG_HOME:-~/.config}/claude-split/folders.json`, keyed by canonical absolute path. Only explicit choices are recorded — including `--split default`, which pins a folder to your home profile — and an entry self-prunes if its split is removed, falling back to the global default.
+- **Global default.** Set with `--split-default <name>`; applies in any folder without its own remembered split.
+- **Prompt.** With no selection and no default, `claude-split` lists the available splits and exits rather than guessing.
+
+## Don't run splits from your home directory
+
+`CLAUDE_CONFIG_DIR` isolates only *user-scope* config. Claude Code also loads *project-scope* config from `<cwd>/.claude/` — settings, `statusLine`, hooks, skills, `CLAUDE.md` — and that is not affected by `CLAUDE_CONFIG_DIR`. When your working directory is your home directory, `<cwd>/.claude` *is* `~/.claude`, so the default profile's settings and skills leak into a split and defeat isolation.
+
+For that reason the home directory is always the default profile: an explicit `--split <name>` from `$HOME` is refused (run it from a project directory instead), and a folder- or globally-configured split is downgraded to the home profile there. Set `CLAUDE_SPLIT_ALLOW_HOME=1` to override.
 
 ## Environment
 
@@ -43,11 +68,3 @@ So folder memory overrides the global default for that folder. The mapping lives
 | `CLAUDE_SPLIT_TOKEN_STORE=file` | Force the file-based token store instead of the macOS Keychain |
 | `CLAUDE_SPLIT_ASSUME_YES=1` | Skip the confirmation prompt on `--split-rm` (scripting) |
 | `CLAUDE_SPLIT_ALLOW_HOME=1` | Allow launching a split from your home directory (isolation is degraded — see above) |
-
-## Install
-
-```sh
-go install github.com/bcostea/claude-split@latest
-```
-
-Or build from source: `git clone` then `make build` (binary lands at `bin/claude-split`).
