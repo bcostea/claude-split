@@ -7,7 +7,7 @@
 
 `claude-split` is a thin launcher (written in Go) that wraps the real `claude` CLI to manage multiple isolated Claude Code profiles ("splits") on one machine. It does not manage the Claude Code installation — it manages the *profile* (config directory and auth). It selects a split, sets the appropriate environment, and `exec`s the real `claude` binary passing **every** argument through untouched. It consumes only its own small set of `--split*` flags; everything else belongs to Claude.
 
-The goal: one Claude install, one subscription, multiple fully-isolated profiles — logging in separately per split — without the profiles stomping each other.
+The goal: one Claude install, multiple fully-isolated profiles — each logging in separately (the same subscription across all of them, or different accounts entirely) — without the profiles stomping each other.
 
 ## Key technical facts (basis for the design)
 
