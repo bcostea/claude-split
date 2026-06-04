@@ -49,6 +49,30 @@ func TestHomeGuardAllowOverride(t *testing.T) {
 	}
 }
 
+func TestHomeGuardPromptBecomesDefaultInHome(t *testing.T) {
+	home := t.TempDir()
+	// No explicit split, no configured default, but splits exist → resolve
+	// returns PrintListExit. In home this must become the default profile.
+	d := resolve.Decision{Action: resolve.PrintListExit}
+	got, _, err := applyHomeGuard(d, false, home, home, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Action != resolve.LaunchDefault {
+		t.Fatalf("expected LaunchDefault in home, got %v", got.Action)
+	}
+}
+
+func TestHomeGuardPromptOutsideHomeStillPrompts(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	d := resolve.Decision{Action: resolve.PrintListExit}
+	got, _, err := applyHomeGuard(d, false, cwd, home, false)
+	if err != nil || got.Action != resolve.PrintListExit {
+		t.Fatalf("outside home the prompt must stand: %v err=%v", got, err)
+	}
+}
+
 func TestHomeGuardDefaultActionUnaffected(t *testing.T) {
 	home := t.TempDir()
 	d := resolve.Decision{Action: resolve.LaunchDefault}

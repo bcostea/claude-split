@@ -55,6 +55,41 @@ func newCmd(bin, home, claudeDir, outFile string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+func TestBareLaunchFromHomeUsesDefault(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+	base := filepath.Join(home, ".claude-splits")
+	// A split exists but no default is configured. Bare launch from home must
+	// run the default profile (no CLAUDE_CONFIG_DIR), not prompt.
+	if err := os.MkdirAll(filepath.Join(base, "xogito"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "registry.json"),
+		[]byte(`{"splits":["xogito"],"default":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "xogito", ".token"),
+		[]byte("sk-ant-oat-X"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.txt")
+	cmd := newCmd(bin, home, claudeDir, out, "-p", "hi")
+	cmd.Dir = home
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected default launch to succeed, got %v", err)
+	}
+	s := string(mustRead(t, out))
+	if !strings.Contains(s, "ARGS:-p hi") {
+		t.Fatalf("passthrough wrong: %q", s)
+	}
+	if !strings.Contains(s, "CLAUDE_CONFIG_DIR=\n") {
+		t.Fatalf("home default should not set CLAUDE_CONFIG_DIR: %q", s)
+	}
+}
+
 func TestExplicitSplitFromHomeIsRefused(t *testing.T) {
 	bin := buildBinary(t)
 	claudeDir := fakeClaudeDir(t)

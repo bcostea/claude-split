@@ -223,15 +223,23 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 // split coming only from the configured default is downgraded to the home
 // profile with a notice. allow bypasses the guard entirely.
 func applyHomeGuard(d resolve.Decision, explicit bool, cwd, home string, allow bool) (resolve.Decision, string, error) {
-	if allow || d.Action != resolve.LaunchSplit || cwd == "" || home == "" || !sameDir(cwd, home) {
+	if allow || cwd == "" || home == "" || !sameDir(cwd, home) {
 		return d, "", nil
 	}
-	if explicit {
-		return d, "", fmt.Errorf("refusing to launch split %q from your home directory: project config in ~/.claude would leak in and defeat isolation. cd into a project directory, or set CLAUDE_SPLIT_ALLOW_HOME=1 to override", d.Split)
+	// In the home directory the profile is always the default.
+	switch d.Action {
+	case resolve.LaunchDefault:
+		return d, "", nil
+	case resolve.LaunchSplit:
+		if explicit {
+			return d, "", fmt.Errorf("refusing to launch split %q from your home directory: project config in ~/.claude would leak in and defeat isolation. cd into a project directory, or set CLAUDE_SPLIT_ALLOW_HOME=1 to override", d.Split)
+		}
+		return resolve.Decision{Action: resolve.LaunchDefault},
+			fmt.Sprintf("in home directory: using the default profile (configured default split %q skipped)", d.Split),
+			nil
+	default: // PrintListExit — no ambiguity in home, just use default
+		return resolve.Decision{Action: resolve.LaunchDefault}, "", nil
 	}
-	return resolve.Decision{Action: resolve.LaunchDefault},
-		fmt.Sprintf("in home directory: using the default profile (configured default split %q skipped)", d.Split),
-		nil
 }
 
 // sameDir reports whether two paths refer to the same directory, resolving
