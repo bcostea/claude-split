@@ -57,6 +57,58 @@ func TestCmdRemovePersists(t *testing.T) {
 	}
 }
 
+func TestCmdPurgeRemovesEverythingButDefault(t *testing.T) {
+	home := withHome(t)
+	t.Setenv("CLAUDE_SPLIT_ASSUME_YES", "1")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	base := filepath.Join(home, ".claude-splits")
+
+	// Seed a split (registry + dir + token) and per-folder memory.
+	r, _ := registry.Load(base)
+	_ = r.Add("work")
+	_ = r.Save()
+	if err := os.MkdirAll(filepath.Join(base, "work"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "work", ".token"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fpath := filepath.Join(home, ".config", "claude-split", "folders.json")
+	if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fpath, []byte(`{"/p":"work"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sentinels for the default/home profile, which must survive.
+	homeClaudeJSON := filepath.Join(home, ".claude.json")
+	homeClaudeDir := filepath.Join(home, ".claude")
+	if err := os.WriteFile(homeClaudeJSON, []byte(`{"keep":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(homeClaudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := Run([]string{"--split-purge"}); code != 0 {
+		t.Fatalf("got %d", code)
+	}
+
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Fatal("~/.claude-splits should be gone")
+	}
+	if _, err := os.Stat(fpath); !os.IsNotExist(err) {
+		t.Fatal("folders.json should be gone")
+	}
+	if _, err := os.Stat(homeClaudeJSON); err != nil {
+		t.Fatalf("~/.claude.json must be untouched: %v", err)
+	}
+	if _, err := os.Stat(homeClaudeDir); err != nil {
+		t.Fatalf("~/.claude/ must be untouched: %v", err)
+	}
+}
+
 func TestCmdWhichExplicit(t *testing.T) {
 	withHome(t)
 	if code := Run([]string{"--split-which", "--split", "default"}); code != 0 {

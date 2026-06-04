@@ -33,6 +33,7 @@ cd ~/code/project && claude-split
 | `claude-split --split-new <name>` | Create a split and authenticate it |
 | `claude-split --split-default <name>` | Set the global default (`default` = home profile) |
 | `claude-split --split-rm <name>` | Remove a split |
+| `claude-split --split-purge` | Remove all splits, their tokens, and config (the home profile is untouched) |
 | `claude-split --split-which` | Show which split would be launched |
 
 Every argument other than the `--split*` flags is passed to `claude` untouched.
