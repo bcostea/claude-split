@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/bcostea/claude-split/internal/args"
+	"github.com/bcostea/claude-split/internal/folders"
 	"github.com/bcostea/claude-split/internal/launcher"
 	"github.com/bcostea/claude-split/internal/registry"
 	"github.com/bcostea/claude-split/internal/resolve"
@@ -161,12 +162,26 @@ func cmdNew(reg *registry.Registry, store token.Store, baseDir, name string) int
 }
 
 func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args.Parsed) int {
-	d := resolve.Resolve(p.Split, p.SplitSet, reg.Default, reg.Splits)
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	canonCwd := canonDir(cwd)
+
+	// Per-folder memory: a previously chosen split for this folder acts as the
+	// effective default, overriding the global default. Stale entries are pruned.
+	fstore, ferr := folders.Load(folders.DefaultPath())
+	if ferr != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", ferr)
+		return 1
+	}
+	effDefault, pruned := effectiveDefault(fstore, reg, canonCwd)
+	if pruned {
+		_ = fstore.Save()
+	}
+
+	d := resolve.Resolve(p.Split, p.SplitSet, effDefault, reg.Splits)
 
 	// In the home directory, project-scope config (~/.claude) would leak into a
 	// split and defeat isolation, so home always resolves to the default profile.
-	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
 	allowHome := os.Getenv("CLAUDE_SPLIT_ALLOW_HOME") != ""
 	d, note, gErr := applyHomeGuard(d, p.SplitSet, cwd, home, allowHome)
 	if gErr != nil {
@@ -205,12 +220,40 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
 		return 1
 	}
+
+	// Remember an explicit choice for this folder (never in home). The split's
+	// name, including "default", is recorded so a later bare launch reuses it.
+	if p.SplitSet && canonCwd != "" && !sameDir(cwd, home) {
+		if cur, ok := fstore.Get(canonCwd); !ok || cur != p.Split {
+			fstore.Set(canonCwd, p.Split)
+			if err := fstore.Save(); err != nil {
+				fmt.Fprintln(os.Stderr, "claude-split: warning: could not record folder split:", err)
+			}
+		}
+	}
+
 	env := launcher.BuildEnv(os.Environ(), configDir, tok)
 	if err := launcher.Exec(claudePath, p.Passthrough, env); err != nil {
 		fmt.Fprintln(os.Stderr, "claude-split: exec failed:", err)
 		return 1
 	}
 	return 0 // unreachable on success (process replaced)
+}
+
+// effectiveDefault returns the default split to feed into resolution for the
+// given folder: the folder's remembered split when present and still valid,
+// otherwise the global default. A remembered split that no longer exists is
+// deleted from the store and reported via pruned (caller persists the store).
+func effectiveDefault(store *folders.Store, reg *registry.Registry, folder string) (def string, pruned bool) {
+	v, ok := store.Get(folder)
+	if !ok {
+		return reg.Default, false
+	}
+	if v == "default" || reg.Has(v) {
+		return v, false
+	}
+	store.Delete(folder)
+	return reg.Default, true
 }
 
 // applyHomeGuard enforces "home is always the default profile". When launching

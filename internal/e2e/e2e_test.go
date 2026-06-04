@@ -48,6 +48,7 @@ func newCmd(bin, home, claudeDir, outFile string, args ...string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"CLAUDE_SPLIT_TOKEN_STORE=file",
 		"PATH="+claudeDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CLAUDE_TEST_OUT="+outFile,
@@ -168,6 +169,94 @@ func TestLaunchHomeProfileSetsNoSplitVars(t *testing.T) {
 	}
 	if !strings.Contains(s, "CLAUDE_CONFIG_DIR=\n") {
 		t.Fatalf("home profile should not set CLAUDE_CONFIG_DIR: %q", s)
+	}
+}
+
+// seedSplit creates a registry with a single split + token in the given home.
+func seedSplit(t *testing.T, home, name, def string) string {
+	t.Helper()
+	base := filepath.Join(home, ".claude-splits")
+	if err := os.MkdirAll(filepath.Join(base, name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reg := `{"splits":["` + name + `"],"default":"` + def + `"}`
+	if err := os.WriteFile(filepath.Join(base, "registry.json"), []byte(reg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, name, ".token"), []byte("sk-ant-oat-"+name), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
+func TestFolderMemoryAutoLoadsRememberedSplit(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+	base := seedSplit(t, home, "work", "") // no global default
+	proj := t.TempDir()
+
+	// 1) Explicit launch in the project records folder -> work.
+	out1 := filepath.Join(t.TempDir(), "out1.txt")
+	c1 := newCmd(bin, home, claudeDir, out1, "--split", "work", "-p", "one")
+	c1.Dir = proj
+	c1.Stderr = os.Stderr
+	if err := c1.Run(); err != nil {
+		t.Fatalf("explicit launch failed: %v", err)
+	}
+
+	// 2) Bare launch in the same project must auto-load work.
+	out2 := filepath.Join(t.TempDir(), "out2.txt")
+	c2 := newCmd(bin, home, claudeDir, out2, "-p", "two")
+	c2.Dir = proj
+	c2.Stderr = os.Stderr
+	if err := c2.Run(); err != nil {
+		t.Fatalf("bare launch failed: %v", err)
+	}
+	s := string(mustRead(t, out2))
+	if !strings.Contains(s, "ARGS:-p two") {
+		t.Fatalf("passthrough wrong: %q", s)
+	}
+	if !strings.Contains(s, "CLAUDE_CONFIG_DIR="+filepath.Join(base, "work")) {
+		t.Fatalf("folder memory did not auto-load split: %q", s)
+	}
+	if !strings.Contains(s, "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-work") {
+		t.Fatalf("token not injected: %q", s)
+	}
+}
+
+func TestFolderMemoryStaleEntryFallsBackAndPrunes(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+	base := seedSplit(t, home, "work", "work") // global default = work
+	proj := t.TempDir()
+
+	// Pre-seed folders.json pointing this project at a now-deleted split.
+	fpath := filepath.Join(home, ".config", "claude-split", "folders.json")
+	if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canon, _ := filepath.EvalSymlinks(proj)
+	if err := os.WriteFile(fpath, []byte(`{"`+canon+`":"ghost"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.txt")
+	c := newCmd(bin, home, claudeDir, out, "-p", "hi")
+	c.Dir = proj
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		t.Fatalf("launch failed: %v", err)
+	}
+	// Fell back to the global default split.
+	s := string(mustRead(t, out))
+	if !strings.Contains(s, "CLAUDE_CONFIG_DIR="+filepath.Join(base, "work")) {
+		t.Fatalf("expected fallback to global default work: %q", s)
+	}
+	// Stale ghost entry pruned.
+	if data, _ := os.ReadFile(fpath); strings.Contains(string(data), "ghost") {
+		t.Fatalf("stale entry not pruned: %s", data)
 	}
 }
 
