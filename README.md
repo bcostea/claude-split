@@ -26,6 +26,16 @@ Because of this, `claude-split` treats the home directory as always-default: an 
 
 All arguments other than the `--split*` flags above are passed through to `claude` untouched.
 
+### Per-folder memory
+
+When you launch a split explicitly (`--split <name>`) from a project folder, `claude-split` remembers that folder used that split. The next time you run a bare `claude-split` (no `--split`) in the same folder, it auto-loads that split. The resolution order is:
+
+```
+explicit --split  >  folder's last-used split  >  global default  >  prompt
+```
+
+So folder memory overrides the global default for that folder. The mapping lives in `${XDG_CONFIG_HOME:-~/.config}/claude-split/folders.json`. Only an explicit `--split` is recorded (including `--split default` to pin a folder to your home profile); if a remembered split is later removed, the entry self-prunes and resolution falls back to the global default.
+
 ## Environment
 
 | Variable | Effect |
