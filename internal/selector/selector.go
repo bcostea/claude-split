@@ -87,6 +87,9 @@ func Run(in io.Reader, out io.Writer, items []Item, footer []string) (Result, er
 	n := len(items) + 1 // + the "new split" entry
 	cursor := 0
 
+	fmt.Fprint(out, "\x1b[?25l")       // hide the cursor while navigating
+	defer fmt.Fprint(out, "\x1b[?25h") // restore it on exit
+
 	render(out, items, footer, cursor, false)
 	for {
 		k, err := decodeKey(r)
