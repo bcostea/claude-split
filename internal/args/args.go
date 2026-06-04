@@ -17,6 +17,7 @@ type Parsed struct {
 	Rm         string
 	RmSet      bool
 	Which      bool
+	Purge      bool
 
 	Passthrough []string
 }
@@ -31,6 +32,7 @@ var valueFlags = map[string]bool{
 var boolFlags = map[string]bool{
 	"--split-list":  true,
 	"--split-which": true,
+	"--split-purge": true,
 }
 
 // Parse partitions argv. Any argument that is not a recognized wrapper flag
@@ -75,6 +77,8 @@ func Parse(argv []string) (Parsed, error) {
 				p.List = true
 			case "--split-which":
 				p.Which = true
+			case "--split-purge":
+				p.Purge = true
 			}
 		default:
 			p.Passthrough = append(p.Passthrough, arg)

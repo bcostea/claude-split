@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,6 +50,8 @@ func Run(argv []string) int {
 		return cmdDefault(reg, p.Default)
 	case p.RmSet:
 		return cmdRemove(reg, store, p.Rm)
+	case p.Purge:
+		return cmdPurge(reg, store, baseDir)
 	case p.Which:
 		return cmdWhich(reg, p)
 	default:
@@ -109,6 +112,41 @@ func cmdRemove(reg *registry.Registry, store token.Store, name string) int {
 		return 1
 	}
 	fmt.Printf("Removed split %q. (Its directory under ~/.claude-splits is left in place.)\n", name)
+	return 0
+}
+
+// cmdPurge removes every split, its token, and all claude-split config,
+// leaving only the default/home profile. It operates strictly on the
+// ~/.claude-splits directory and the folders.json config — never on
+// ~/.claude.json or ~/.claude/.
+func cmdPurge(reg *registry.Registry, store token.Store, baseDir string) int {
+	// Defensive guard: only ever wipe a directory literally named .claude-splits.
+	if filepath.Base(baseDir) != ".claude-splits" {
+		fmt.Fprintf(os.Stderr, "claude-split: refusing to purge unexpected path %q\n", baseDir)
+		return 1
+	}
+
+	n := len(reg.Splits)
+	if !confirm(fmt.Sprintf("Purge %d split(s), their tokens, and all claude-split config? The home profile is untouched. [y/N] ", n)) {
+		fmt.Println("Aborted.")
+		return 0
+	}
+
+	// Delete tokens first so macOS Keychain items are cleared (a directory wipe
+	// would not remove them).
+	for _, s := range reg.Splits {
+		_ = store.Delete(s)
+	}
+	if err := os.RemoveAll(baseDir); err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return 1
+	}
+	if err := os.Remove(folders.DefaultPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return 1
+	}
+
+	fmt.Printf("Purged %d split(s). Only the default profile remains.\n", n)
 	return 0
 }
 

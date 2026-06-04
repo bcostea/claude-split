@@ -72,4 +72,8 @@ func TestParseAllValueFlags(t *testing.T) {
 	if !p.Which {
 		t.Fatal("expected Which=true")
 	}
+	p, _ = Parse([]string{"--split-purge"})
+	if !p.Purge {
+		t.Fatal("expected Purge=true")
+	}
 }
