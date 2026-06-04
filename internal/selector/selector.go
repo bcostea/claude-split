@@ -80,12 +80,14 @@ func decodeKey(r *bufio.Reader) (key, error) {
 }
 
 // Run shows items plus a trailing "new split" entry and returns the choice.
-func Run(in io.Reader, out io.Writer, items []Item) (Result, error) {
+// footer lines (e.g. command hints) are drawn dimmed below the menu and stay
+// in place across redraws.
+func Run(in io.Reader, out io.Writer, items []Item, footer []string) (Result, error) {
 	r := bufio.NewReader(in)
 	n := len(items) + 1 // + the "new split" entry
 	cursor := 0
 
-	render(out, items, cursor, false)
+	render(out, items, footer, cursor, false)
 	for {
 		k, err := decodeKey(r)
 		if err == io.EOF {
@@ -111,16 +113,16 @@ func Run(in io.Reader, out io.Writer, items []Item) (Result, error) {
 			}
 			return Result{Kind: Pick, Name: items[cursor].Name}, nil
 		}
-		render(out, items, cursor, true)
+		render(out, items, footer, cursor, true)
 	}
 }
 
-// render draws the menu. When redraw is true it first moves the cursor up over
-// the previous frame so the new frame overwrites it in place.
-func render(out io.Writer, items []Item, cursor int, redraw bool) {
-	n := len(items) + 1
+// render draws the menu and footer. When redraw is true it first moves the
+// cursor up over the previous frame so the new frame overwrites it in place.
+func render(out io.Writer, items []Item, footer []string, cursor int, redraw bool) {
+	total := len(items) + 1 + len(footer)
 	if redraw {
-		fmt.Fprintf(out, "\x1b[%dA", n)
+		fmt.Fprintf(out, "\x1b[%dA", total)
 	}
 	for i := 0; i <= len(items); i++ {
 		marker := "  "
@@ -141,5 +143,8 @@ func render(out io.Writer, items []Item, cursor int, redraw bool) {
 			line = "\x1b[7m" + line + "\x1b[0m" // reverse video
 		}
 		fmt.Fprintf(out, "\r\x1b[K%s\n", line)
+	}
+	for _, f := range footer {
+		fmt.Fprintf(out, "\r\x1b[K\x1b[2m%s\x1b[0m\n", f) // dim
 	}
 }

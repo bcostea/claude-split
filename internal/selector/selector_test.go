@@ -47,7 +47,7 @@ func items2() []Item {
 func TestRunDownEnterPicksSecond(t *testing.T) {
 	in := strings.NewReader("\x1b[B\r") // down, enter
 	var out bytes.Buffer
-	res, err := Run(in, &out, items2())
+	res, err := Run(in, &out, items2(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRunDownEnterPicksSecond(t *testing.T) {
 }
 
 func TestRunEnterImmediatelyPicksFirst(t *testing.T) {
-	res, _ := Run(strings.NewReader("\r"), &bytes.Buffer{}, items2())
+	res, _ := Run(strings.NewReader("\r"), &bytes.Buffer{}, items2(), nil)
 	if res.Kind != Pick || res.Name != "default" {
 		t.Fatalf("got %+v", res)
 	}
@@ -66,14 +66,14 @@ func TestRunEnterImmediatelyPicksFirst(t *testing.T) {
 func TestRunNavigateToNewEntry(t *testing.T) {
 	// two items -> "new" is index 2: down, down, enter
 	in := strings.NewReader("\x1b[B\x1b[B\r")
-	res, _ := Run(in, &bytes.Buffer{}, items2())
+	res, _ := Run(in, &bytes.Buffer{}, items2(), nil)
 	if res.Kind != New {
 		t.Fatalf("got %+v", res)
 	}
 }
 
 func TestRunCtrlCCancels(t *testing.T) {
-	res, _ := Run(strings.NewReader("\x03"), &bytes.Buffer{}, items2())
+	res, _ := Run(strings.NewReader("\x03"), &bytes.Buffer{}, items2(), nil)
 	if res.Kind != Cancel {
 		t.Fatalf("got %+v", res)
 	}
@@ -81,7 +81,7 @@ func TestRunCtrlCCancels(t *testing.T) {
 
 func TestRunUpClampsAtTop(t *testing.T) {
 	// up at top stays on first, then enter
-	res, _ := Run(strings.NewReader("\x1b[A\r"), &bytes.Buffer{}, items2())
+	res, _ := Run(strings.NewReader("\x1b[A\r"), &bytes.Buffer{}, items2(), nil)
 	if res.Kind != Pick || res.Name != "default" {
 		t.Fatalf("got %+v", res)
 	}
@@ -89,11 +89,20 @@ func TestRunUpClampsAtTop(t *testing.T) {
 
 func TestRunRendersItemsAndNewEntry(t *testing.T) {
 	var out bytes.Buffer
-	Run(strings.NewReader("\r"), &out, items2())
+	Run(strings.NewReader("\r"), &out, items2(), nil)
 	s := out.String()
 	for _, want := range []string{"default (home)", "xogito", "+ new split…"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("frame missing %q: %q", want, s)
 		}
+	}
+}
+
+func TestRunRendersFooter(t *testing.T) {
+	var out bytes.Buffer
+	footer := []string{"", "Commands: --split-list  --split-new <name>"}
+	Run(strings.NewReader("\r"), &out, items2(), footer)
+	if !strings.Contains(out.String(), "Commands: --split-list  --split-new <name>") {
+		t.Fatalf("footer not rendered: %q", out.String())
 	}
 }

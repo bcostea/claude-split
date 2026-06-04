@@ -280,7 +280,12 @@ func runSelector(reg *registry.Registry, store token.Store, baseDir string) (cho
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
 		return "", 1, false
 	}
-	res, rerr := selector.Run(os.Stdin, os.Stderr, items)
+	footer := []string{
+		"",
+		"Commands: --split <name>   --split-list   --split-new <name>",
+		"          --split-default <name>   --split-rm <name>   --split-which",
+	}
+	res, rerr := selector.Run(os.Stdin, os.Stderr, items, footer)
 	_ = term.Restore(fd, oldState)
 	fmt.Fprintln(os.Stderr)
 
