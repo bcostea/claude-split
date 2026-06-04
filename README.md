@@ -1,6 +1,6 @@
 # claude-split
 
-Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from one install and one subscription. `claude-split` wraps the real `claude`: it selects a split, sets up its isolated config and authentication, and forwards every other argument through unchanged.
+Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from a single Claude Code install — each with its own config and login. `claude-split` wraps the real `claude`: it selects a split, sets up its isolated config and authentication, and forwards every other argument through unchanged.
 
 ## Install
 
@@ -41,7 +41,7 @@ Every argument other than the `--split*` flags is passed to `claude` untouched.
 
 Each split is a self-contained directory at `~/.claude-splits/<name>/` holding its own `.claude.json`, `.claude/` state, and a long-lived auth token. `claude-split` selects one by pointing `CLAUDE_CONFIG_DIR` at its directory and injecting the token as `CLAUDE_CODE_OAUTH_TOKEN`, then `exec`s the real `claude`. The home profile (`~/.claude.json`, `~/.claude/`) is the implicit `default` split and is never modified, so running `claude` directly behaves exactly as before.
 
-Because each split authenticates separately, you log in once per split — all against the same subscription. On macOS each split's token is stored as its own Keychain item; elsewhere it is a `0600` file inside the split directory.
+Because each split authenticates separately, you log in once per split — with whatever account you choose: the same subscription across all of them, or different accounts entirely. On macOS each split's token is stored as its own Keychain item; elsewhere it is a `0600` file inside the split directory.
 
 ## Choosing which split runs
 
