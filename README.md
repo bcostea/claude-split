@@ -18,6 +18,16 @@ go install github.com/bcostea/claude-split@latest
 
 Or build from source: clone the repo and run `make build` (the binary lands at `bin/claude-split`).
 
+### Tip: alias `claude`
+
+To route your normal `claude` usage through claude-split, add an alias to your shell rc:
+
+```sh
+alias claude="claude-split"
+```
+
+It only affects interactive use, and `claude-split` still execs the real `claude` binary by `PATH` lookup, so there is no recursion.
+
 ## Quick start
 
 ```sh
