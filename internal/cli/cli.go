@@ -321,7 +321,8 @@ func runSelector(reg *registry.Registry, store token.Store, baseDir string) (cho
 	footer := []string{
 		"",
 		"Commands: --split <name>   --split-list   --split-new <name>",
-		"          --split-default <name>   --split-rm <name>   --split-which",
+		"          --split-default <name>   --split-rm <name>",
+		"          --split-purge   --split-which",
 	}
 	res, rerr := selector.Run(os.Stdin, os.Stderr, items, footer)
 	_ = term.Restore(fd, oldState)
