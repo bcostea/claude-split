@@ -37,6 +37,14 @@ func fakeClaudeDir(t *testing.T) string {
 
 func run(t *testing.T, bin, home, claudeDir, outFile string, args ...string) {
 	t.Helper()
+	cmd := newCmd(bin, home, claudeDir, outFile, args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+}
+
+func newCmd(bin, home, claudeDir, outFile string, args ...string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
@@ -44,9 +52,35 @@ func run(t *testing.T, bin, home, claudeDir, outFile string, args ...string) {
 		"PATH="+claudeDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CLAUDE_TEST_OUT="+outFile,
 	)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run failed: %v", err)
+	return cmd
+}
+
+func TestExplicitSplitFromHomeIsRefused(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+	base := filepath.Join(home, ".claude-splits")
+	if err := os.MkdirAll(filepath.Join(base, "work"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "registry.json"),
+		[]byte(`{"splits":["work"],"default":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "work", ".token"),
+		[]byte("sk-ant-oat-T"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.txt")
+	cmd := newCmd(bin, home, claudeDir, out, "--split", "work", "-p", "hi")
+	cmd.Dir = home // run FROM the home directory
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit when launching a split from home")
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatal("fake claude was invoked; the split should have been refused")
 	}
 }
 

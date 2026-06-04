@@ -163,6 +163,20 @@ func cmdNew(reg *registry.Registry, store token.Store, baseDir, name string) int
 func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args.Parsed) int {
 	d := resolve.Resolve(p.Split, p.SplitSet, reg.Default, reg.Splits)
 
+	// In the home directory, project-scope config (~/.claude) would leak into a
+	// split and defeat isolation, so home always resolves to the default profile.
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	allowHome := os.Getenv("CLAUDE_SPLIT_ALLOW_HOME") != ""
+	d, note, gErr := applyHomeGuard(d, p.SplitSet, cwd, home, allowHome)
+	if gErr != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", gErr)
+		return 1
+	}
+	if note != "" {
+		fmt.Fprintln(os.Stderr, "claude-split:", note)
+	}
+
 	if d.Action == resolve.PrintListExit {
 		fmt.Fprintln(os.Stderr, "No split selected. Available:")
 		cmdList(reg, store)
@@ -197,6 +211,43 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 		return 1
 	}
 	return 0 // unreachable on success (process replaced)
+}
+
+// applyHomeGuard enforces "home is always the default profile". When launching
+// from the home directory, the project-scope config at ~/.claude (settings,
+// statusLine, hooks, skills, CLAUDE.md) is loaded regardless of
+// CLAUDE_CONFIG_DIR, so a split cannot actually be isolated there.
+//
+// It returns the (possibly adjusted) decision, an optional notice to print, and
+// an error if the launch should be refused. An explicit --split is refused; a
+// split coming only from the configured default is downgraded to the home
+// profile with a notice. allow bypasses the guard entirely.
+func applyHomeGuard(d resolve.Decision, explicit bool, cwd, home string, allow bool) (resolve.Decision, string, error) {
+	if allow || d.Action != resolve.LaunchSplit || cwd == "" || home == "" || !sameDir(cwd, home) {
+		return d, "", nil
+	}
+	if explicit {
+		return d, "", fmt.Errorf("refusing to launch split %q from your home directory: project config in ~/.claude would leak in and defeat isolation. cd into a project directory, or set CLAUDE_SPLIT_ALLOW_HOME=1 to override", d.Split)
+	}
+	return resolve.Decision{Action: resolve.LaunchDefault},
+		fmt.Sprintf("in home directory: using the default profile (configured default split %q skipped)", d.Split),
+		nil
+}
+
+// sameDir reports whether two paths refer to the same directory, resolving
+// relative paths and symlinks where possible.
+func sameDir(a, b string) bool {
+	return canonDir(a) == canonDir(b)
+}
+
+func canonDir(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if ev, err := filepath.EvalSymlinks(p); err == nil {
+		return ev
+	}
+	return filepath.Clean(p)
 }
 
 // confirm prompts for y/N on an interactive terminal. It auto-confirms when
