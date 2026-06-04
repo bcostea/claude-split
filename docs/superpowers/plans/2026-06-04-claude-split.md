@@ -1650,7 +1650,7 @@ Note: set the brew tap owner/repo and update `go.mod`'s module path to the real 
 ```markdown
 # claude-split
 
-Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from one install and one subscription. `claude-split` wraps the real `claude`, selects a split, and forwards every other argument unchanged.
+Run multiple isolated [Claude Code](https://docs.claude.com/claude-code) profiles ("splits") from a single Claude Code install, each with its own config and login. `claude-split` wraps the real `claude`, selects a split, and forwards every other argument unchanged.
 
 ## How it works
 
