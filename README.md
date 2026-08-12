@@ -10,13 +10,23 @@ Homebrew (macOS):
 brew install bcostea/claude-tools/claude-split
 ```
 
-Go (any platform):
+Go (macOS and Linux):
 
 ```sh
 go install github.com/bcostea/claude-split@latest
 ```
 
 Or build from source: clone the repo and run `make build` (the binary lands at `bin/claude-split`).
+
+### Windows
+
+The Go binary does not build for Windows yet, so `contrib/windows/claude-split.ps1` provides the same mechanism as a PowerShell script. It writes the same `registry.json` and `folders.json`, in the same locations and shape, so switching to the binary later needs no migration. Dot-source it from your `$PROFILE`:
+
+```powershell
+. "$env:USERPROFILE\.claude-splits\claude-split.ps1"
+```
+
+See [contrib/windows/README.md](contrib/windows/README.md) for the command parity table, the Windows-specific differences, and the known gaps.
 
 ### Tip: alias `claude`
 
