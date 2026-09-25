@@ -33,24 +33,38 @@ func FindClaude(pathEnv, selfPath string) (string, error) {
 	return "", errors.New("real `claude` binary not found on PATH")
 }
 
+// splitVars are set by claude-split for a split. They are always stripped
+// first, so a value inherited from a parent split session never leaks through.
+var splitVars = []string{"CLAUDE_CONFIG_DIR=", "CLAUDE_CODE_OAUTH_TOKEN="}
+
+// authVars override the login stored for a config dir. They are stripped for a
+// split so that claude uses the split's own `/login` credentials.
+var authVars = []string{
+	"CLAUDE_CODE_OAUTH_TOKEN=",
+	"CLAUDE_CODE_OAUTH_REFRESH_TOKEN=",
+	"ANTHROPIC_API_KEY=",
+	"ANTHROPIC_AUTH_TOKEN=",
+}
+
 // BuildEnv returns the environment to launch with. For the home profile pass
-// configDir == "" (env returned unchanged). For a split, stale copies of the
-// managed vars are stripped and the new values appended.
-func BuildEnv(base []string, configDir, token string) []string {
-	if configDir == "" {
-		return base
+// configDir == "": only the split vars are stripped, so the home profile runs
+// as plain `claude` would. For a split, the split vars and all auth overrides
+// are stripped and CLAUDE_CONFIG_DIR is set. Claude Code keeps a separate login
+// per CLAUDE_CONFIG_DIR, so the split then authenticates as its own account.
+func BuildEnv(base []string, configDir string) []string {
+	strip := splitVars
+	if configDir != "" {
+		strip = append(append([]string{}, splitVars...), authVars...)
 	}
-	managed := []string{"CLAUDE_CONFIG_DIR=", "CLAUDE_CODE_OAUTH_TOKEN="}
-	out := make([]string, 0, len(base)+2)
+	out := make([]string, 0, len(base)+1)
 	for _, e := range base {
-		if hasAnyPrefix(e, managed) {
+		if hasAnyPrefix(e, strip) {
 			continue
 		}
 		out = append(out, e)
 	}
-	out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
-	if token != "" {
-		out = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	if configDir != "" {
+		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	return out
 }

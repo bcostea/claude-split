@@ -140,7 +140,12 @@ func TestLaunchSplitPassesEnvAndArgs(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "out.txt")
-	run(t, bin, home, claudeDir, out, "--split", "work", "-p", "hello")
+	cmd := newCmd(bin, home, claudeDir, out, "--split", "work", "-p", "hello")
+	cmd.Env = append(cmd.Env, "CLAUDE_CODE_OAUTH_TOKEN=stale", "ANTHROPIC_API_KEY=stale")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
 
 	got, _ := os.ReadFile(out)
 	s := string(got)
@@ -150,8 +155,9 @@ func TestLaunchSplitPassesEnvAndArgs(t *testing.T) {
 	if !strings.Contains(s, "CLAUDE_CONFIG_DIR="+filepath.Join(base, "work")) {
 		t.Fatalf("config dir wrong: %q", s)
 	}
-	if !strings.Contains(s, "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-TESTTOKEN") {
-		t.Fatalf("token wrong: %q", s)
+	// The split must use its own login: no token, no inherited auth override.
+	if !strings.Contains(s, "CLAUDE_CODE_OAUTH_TOKEN=\n") || !strings.Contains(s, "ANTHROPIC_API_KEY=\n") {
+		t.Fatalf("auth override leaked into split: %q", s)
 	}
 }
 
@@ -220,8 +226,8 @@ func TestFolderMemoryAutoLoadsRememberedSplit(t *testing.T) {
 	if !strings.Contains(s, "CLAUDE_CONFIG_DIR="+filepath.Join(base, "work")) {
 		t.Fatalf("folder memory did not auto-load split: %q", s)
 	}
-	if !strings.Contains(s, "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-work") {
-		t.Fatalf("token not injected: %q", s)
+	if !strings.Contains(s, "CLAUDE_CODE_OAUTH_TOKEN=\n") {
+		t.Fatalf("token must not be injected: %q", s)
 	}
 }
 
@@ -257,6 +263,69 @@ func TestFolderMemoryStaleEntryFallsBackAndPrunes(t *testing.T) {
 	// Stale ghost entry pruned.
 	if data, _ := os.ReadFile(fpath); strings.Contains(string(data), "ghost") {
 		t.Fatalf("stale entry not pruned: %s", data)
+	}
+}
+
+func TestNewSplitLogsInWithClaudeAuth(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+
+	out := filepath.Join(t.TempDir(), "out.txt")
+	run(t, bin, home, claudeDir, out, "--split-new", "work")
+
+	dir := filepath.Join(home, ".claude-splits", "work")
+	if s := string(mustRead(t, filepath.Join(dir, ".fake-login"))); !strings.Contains(s, "test@example.com") {
+		t.Fatalf("login not stored in split dir: %q", s)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".token")); !os.IsNotExist(err) {
+		t.Fatal("no legacy token must be written")
+	}
+
+	list := newCmd(bin, home, claudeDir, out, "--split-list")
+	got, err := list.Output()
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if !strings.Contains(string(got), "test@example.com") {
+		t.Fatalf("list does not show account: %s", got)
+	}
+}
+
+func TestDoctorFixDeletesLegacyTokenAndRemoveLogsOut(t *testing.T) {
+	bin := buildBinary(t)
+	claudeDir := fakeClaudeDir(t)
+	home := t.TempDir()
+	base := seedSplit(t, home, "work", "") // seeds a legacy .token
+	dir := filepath.Join(base, "work")
+	if err := os.WriteFile(filepath.Join(dir, ".fake-login"), []byte("test@example.com"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "out.txt")
+
+	doc := newCmd(bin, home, claudeDir, out, "--split-doctor")
+	report, err := doc.Output()
+	if err == nil || !strings.Contains(string(report), "legacy setup-token") {
+		t.Fatalf("doctor should report the legacy token and exit non-zero: %v\n%s", err, report)
+	}
+
+	fix := newCmd(bin, home, claudeDir, out, "--split-fix")
+	fix.Env = append(fix.Env, "CLAUDE_SPLIT_ASSUME_YES=1")
+	if b, err := fix.CombinedOutput(); err != nil {
+		t.Fatalf("fix failed: %v\n%s", err, b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".token")); !os.IsNotExist(err) {
+		t.Fatal("legacy token not deleted")
+	}
+	run(t, bin, home, claudeDir, out, "--split-doctor")
+
+	rm := newCmd(bin, home, claudeDir, out, "--split-rm", "work")
+	rm.Env = append(rm.Env, "CLAUDE_SPLIT_ASSUME_YES=1")
+	if err := rm.Run(); err != nil {
+		t.Fatalf("rm failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".fake-login")); !os.IsNotExist(err) {
+		t.Fatal("rm did not log the split out")
 	}
 }
 

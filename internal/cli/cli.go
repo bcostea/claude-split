@@ -8,11 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"golang.org/x/term"
 
 	"github.com/bcostea/claude-split/internal/args"
+	"github.com/bcostea/claude-split/internal/auth"
+	"github.com/bcostea/claude-split/internal/doctor"
 	"github.com/bcostea/claude-split/internal/folders"
 	"github.com/bcostea/claude-split/internal/launcher"
 	"github.com/bcostea/claude-split/internal/registry"
@@ -43,25 +46,66 @@ func Run(argv []string) int {
 
 	switch {
 	case p.List:
-		return cmdList(reg, store)
+		return cmdList(reg, baseDir)
 	case p.NewSet:
-		return cmdNew(reg, store, baseDir, p.New)
+		return cmdNew(reg, baseDir, p.New)
+	case p.LoginSet:
+		return cmdLogin(reg, baseDir, p.Login)
 	case p.DefaultSet:
 		return cmdDefault(reg, p.Default)
 	case p.RmSet:
-		return cmdRemove(reg, store, p.Rm)
+		return cmdRemove(reg, store, baseDir, p.Rm)
 	case p.Purge:
 		return cmdPurge(reg, store, baseDir)
+	case p.Doctor || p.Fix:
+		return cmdDoctor(reg, store, home, baseDir, p.Fix)
 	case p.Which:
 		return cmdWhich(reg, p)
 	default:
-		return cmdLaunch(reg, store, baseDir, p)
+		return cmdLaunch(reg, baseDir, p)
 	}
 }
 
-func cmdList(reg *registry.Registry, store token.Store) int {
+// findClaude returns the real claude binary, skipping this wrapper.
+func findClaude() (string, error) {
+	self, _ := os.Executable()
+	return launcher.FindClaude(os.Getenv("PATH"), self)
+}
+
+// accounts returns the login label of each split, read in parallel from
+// `claude auth status`.
+func accounts(baseDir string, splits []string) map[string]string {
+	out := make(map[string]string, len(splits))
+	claudePath, err := findClaude()
+	if err != nil {
+		for _, s := range splits {
+			out[s] = "unknown (claude not found)"
+		}
+		return out
+	}
+	c := auth.Claude{Path: claudePath}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, s := range splits {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			label := "unknown"
+			if info, err := c.Status(filepath.Join(baseDir, s)); err == nil {
+				label = info.Account()
+			}
+			mu.Lock()
+			out[s] = label
+			mu.Unlock()
+		}(s)
+	}
+	wg.Wait()
+	return out
+}
+
+func cmdList(reg *registry.Registry, baseDir string) int {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "SPLIT\tDEFAULT\tTOKEN")
+	fmt.Fprintln(w, "SPLIT\tDEFAULT\tACCOUNT")
 	marker := func(name string) string {
 		if reg.Default == name {
 			return "*"
@@ -69,12 +113,9 @@ func cmdList(reg *registry.Registry, store token.Store) int {
 		return ""
 	}
 	fmt.Fprintf(w, "default (home)\t%s\tn/a\n", marker("default"))
+	acc := accounts(baseDir, reg.Splits)
 	for _, s := range reg.Splits {
-		tokState := "missing"
-		if _, err := store.Load(s); err == nil {
-			tokState = "ok"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s, marker(s), tokState)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", s, marker(s), acc[s])
 	}
 	w.Flush()
 	return 0
@@ -93,12 +134,12 @@ func cmdDefault(reg *registry.Registry, name string) int {
 	return 0
 }
 
-func cmdRemove(reg *registry.Registry, store token.Store, name string) int {
+func cmdRemove(reg *registry.Registry, store token.Store, baseDir, name string) int {
 	if !reg.Has(name) {
 		fmt.Fprintf(os.Stderr, "claude-split: split %q does not exist\n", name)
 		return 1
 	}
-	if !confirm(fmt.Sprintf("Remove split %q and its stored token? [y/N] ", name)) {
+	if !confirm(fmt.Sprintf("Remove split %q and log it out? [y/N] ", name)) {
 		fmt.Println("Aborted.")
 		return 0
 	}
@@ -106,6 +147,7 @@ func cmdRemove(reg *registry.Registry, store token.Store, name string) int {
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
 		return 1
 	}
+	logout(baseDir, name)
 	_ = store.Delete(name)
 	if err := reg.Save(); err != nil {
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
@@ -127,14 +169,15 @@ func cmdPurge(reg *registry.Registry, store token.Store, baseDir string) int {
 	}
 
 	n := len(reg.Splits)
-	if !confirm(fmt.Sprintf("Purge %d split(s), their tokens, and all claude-split config? The home profile is untouched. [y/N] ", n)) {
+	if !confirm(fmt.Sprintf("Purge %d split(s), their logins, and all claude-split config? The home profile is untouched. [y/N] ", n)) {
 		fmt.Println("Aborted.")
 		return 0
 	}
 
-	// Delete tokens first so macOS Keychain items are cleared (a directory wipe
-	// would not remove them).
+	// Log out and delete legacy tokens first so macOS Keychain items are
+	// cleared (a directory wipe would not remove them).
 	for _, s := range reg.Splits {
+		logout(baseDir, s)
 		_ = store.Delete(s)
 	}
 	if err := os.RemoveAll(baseDir); err != nil {
@@ -163,7 +206,7 @@ func cmdWhich(reg *registry.Registry, p args.Parsed) int {
 	return 0
 }
 
-func cmdNew(reg *registry.Registry, store token.Store, baseDir, name string) int {
+func cmdNew(reg *registry.Registry, baseDir, name string) int {
 	if name == "default" {
 		fmt.Fprintln(os.Stderr, "claude-split: 'default' is reserved for the home profile")
 		return 1
@@ -177,21 +220,8 @@ func cmdNew(reg *registry.Registry, store token.Store, baseDir, name string) int
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
 		return 1
 	}
-	self, _ := os.Executable()
-	claudePath, err := launcher.FindClaude(os.Getenv("PATH"), self)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claude-split:", err)
-		return 1
-	}
-	fmt.Fprintf(os.Stderr, "Authenticating split %q — complete the login when prompted...\n", name)
-	tok, err := token.ClaudeMinter{ClaudePath: claudePath}.Mint(configDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claude-split:", err)
-		return 1
-	}
-	if err := store.Save(name, tok); err != nil {
-		fmt.Fprintln(os.Stderr, "claude-split:", err)
-		return 1
+	if code := login(configDir, name); code != 0 {
+		return code
 	}
 	_ = reg.Add(name)
 	if err := reg.Save(); err != nil {
@@ -205,7 +235,127 @@ func cmdNew(reg *registry.Registry, store token.Store, baseDir, name string) int
 	return 0
 }
 
-func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args.Parsed) int {
+// cmdLogin logs an existing split in again, for example to change its account
+// or to move it off a legacy token.
+func cmdLogin(reg *registry.Registry, baseDir, name string) int {
+	if !reg.Has(name) {
+		fmt.Fprintf(os.Stderr, "claude-split: split %q does not exist\n", name)
+		return 1
+	}
+	return login(filepath.Join(baseDir, name), name)
+}
+
+// login runs Claude Code's own login for configDir and prints the account.
+func login(configDir, name string) int {
+	claudePath, err := findClaude()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return 1
+	}
+	c := auth.Claude{Path: claudePath}
+	fmt.Fprintf(os.Stderr, "Logging in split %q. Use the account this split must run as.\n", name)
+	if err := c.Login(configDir); err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return 1
+	}
+	info, err := c.Status(configDir)
+	if err != nil || !info.LoggedIn {
+		fmt.Fprintf(os.Stderr, "claude-split: login for split %q did not complete\n", name)
+		return 1
+	}
+	fmt.Printf("Split %q uses %s.\n", name, info.Account())
+	return 0
+}
+
+// logout removes a split's Claude Code login. It is best effort: the split is
+// being removed, so a failure only leaves a stale Keychain item.
+func logout(baseDir, name string) {
+	claudePath, err := findClaude()
+	if err != nil {
+		return
+	}
+	if err := (auth.Claude{Path: claudePath}).Logout(filepath.Join(baseDir, name)); err != nil {
+		fmt.Fprintf(os.Stderr, "claude-split: warning: could not log out split %q: %v\n", name, err)
+	}
+}
+
+// cmdDoctor reports isolation and login problems. With fix, it applies every
+// automatic fix after confirmation and reports what the user must do.
+func cmdDoctor(reg *registry.Registry, store token.Store, home, baseDir string, fix bool) int {
+	claudePath, err := findClaude()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split:", err)
+		return 1
+	}
+	legacy, err := store.List()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude-split: warning: cannot list legacy tokens:", err)
+	}
+	findings := doctor.Check(doctor.Env{
+		Home:         home,
+		BaseDir:      baseDir,
+		Splits:       reg.Splits,
+		Status:       auth.Claude{Path: claudePath}.Status,
+		LegacyTokens: legacy,
+		DeleteLegacy: store.Delete,
+	})
+	if len(findings) == 0 {
+		fmt.Println("No problems found.")
+		return 0
+	}
+
+	fixable := 0
+	for _, f := range findings {
+		kind := "manual"
+		if f.Fix != nil {
+			kind = "fixable"
+			fixable++
+		}
+		scope := f.Split
+		if scope == "" {
+			scope = "(global)"
+		}
+		fmt.Printf("%-12s %-8s %s\n", scope, kind, f.Problem)
+		for _, d := range f.Details {
+			fmt.Printf("%-21s - %s\n", "", d)
+		}
+		if f.Hint != "" {
+			fmt.Printf("%-21s → %s\n", "", f.Hint)
+		}
+	}
+	fmt.Printf("\n%d problem(s), %d fixable.\n", len(findings), fixable)
+
+	if !fix {
+		if fixable > 0 {
+			fmt.Println("Run: claude-split --split-fix")
+		}
+		return 1
+	}
+	if fixable == 0 {
+		return 1
+	}
+	if !confirm(fmt.Sprintf("Apply %d fix(es)? [y/N] ", fixable)) {
+		fmt.Println("Aborted.")
+		return 1
+	}
+	failed := 0
+	for _, f := range findings {
+		if f.Fix == nil {
+			continue
+		}
+		if err := f.Fix(); err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "claude-split: fix failed (%s: %s): %v\n", f.Split, f.Problem, err)
+		}
+	}
+	fmt.Printf("Applied %d fix(es).\n", fixable-failed)
+	if failed > 0 || fixable < len(findings) {
+		return 1
+	}
+	return 0
+}
+
+func cmdLaunch(reg *registry.Registry, baseDir string, p args.Parsed) int {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	canonCwd := canonDir(cwd)
@@ -239,11 +389,11 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 	if d.Action == resolve.PrintListExit {
 		if !interactiveTTY() {
 			fmt.Fprintln(os.Stderr, "No split selected. Available:")
-			cmdList(reg, store)
+			cmdList(reg, baseDir)
 			fmt.Fprintln(os.Stderr, "\nRe-run with --split <name> ('default' = home profile), or set one: --split-default <name>.")
 			return 1
 		}
-		chosen, code, ok := runSelector(reg, store, baseDir)
+		chosen, code, ok := runSelector(reg, baseDir)
 		if !ok {
 			return code
 		}
@@ -251,23 +401,16 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 		d = resolve.Resolve(chosen, true, effDefault, reg.Splits)
 	}
 
-	var configDir, tok string
+	var configDir string
 	if d.Action == resolve.LaunchSplit {
 		if !reg.Has(d.Split) {
 			fmt.Fprintf(os.Stderr, "claude-split: unknown split %q\n", d.Split)
 			return 1
 		}
 		configDir = filepath.Join(baseDir, d.Split)
-		t, err := store.Load(d.Split)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "claude-split: no token for split %q. Run: claude-split --split-new %s\n", d.Split, d.Split)
-			return 1
-		}
-		tok = t
 	}
 
-	self, _ := os.Executable()
-	claudePath, err := launcher.FindClaude(os.Getenv("PATH"), self)
+	claudePath, err := findClaude()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude-split:", err)
 		return 1
@@ -284,7 +427,7 @@ func cmdLaunch(reg *registry.Registry, store token.Store, baseDir string, p args
 		}
 	}
 
-	env := launcher.BuildEnv(os.Environ(), configDir, tok)
+	env := launcher.BuildEnv(os.Environ(), configDir)
 	if err := launcher.Exec(claudePath, p.Passthrough, env); err != nil {
 		fmt.Fprintln(os.Stderr, "claude-split: exec failed:", err)
 		return 1
@@ -301,14 +444,11 @@ func interactiveTTY() bool {
 // runSelector shows the interactive menu and returns the chosen split name
 // (creating it first when the user picks "new split"). ok is false when the
 // caller should just exit with the returned code (cancel or creation failure).
-func runSelector(reg *registry.Registry, store token.Store, baseDir string) (chosen string, code int, ok bool) {
+func runSelector(reg *registry.Registry, baseDir string) (chosen string, code int, ok bool) {
 	items := []selector.Item{{Name: "default", Label: "default (home)"}}
+	acc := accounts(baseDir, reg.Splits)
 	for _, s := range reg.Splits {
-		status := "no token"
-		if _, err := store.Load(s); err == nil {
-			status = "ok"
-		}
-		items = append(items, selector.Item{Name: s, Label: s, Status: status})
+		items = append(items, selector.Item{Name: s, Label: s, Status: acc[s]})
 	}
 
 	fmt.Fprintln(os.Stderr, "Select a split (↑/↓, Enter, q to cancel):")
@@ -321,8 +461,8 @@ func runSelector(reg *registry.Registry, store token.Store, baseDir string) (cho
 	footer := []string{
 		"",
 		"Commands: --split <name>   --split-list   --split-new <name>",
-		"          --split-default <name>   --split-rm <name>",
-		"          --split-purge   --split-which",
+		"          --split-login <name>   --split-default <name>   --split-rm <name>",
+		"          --split-doctor   --split-fix   --split-purge   --split-which",
 	}
 	res, rerr := selector.Run(os.Stdin, os.Stderr, items, footer)
 	_ = term.Restore(fd, oldState)
@@ -342,7 +482,7 @@ func runSelector(reg *registry.Registry, store token.Store, baseDir string) (cho
 			fmt.Fprintln(os.Stderr, "claude-split: no name entered")
 			return "", 1, false
 		}
-		if c := cmdNew(reg, store, baseDir, name); c != 0 {
+		if c := cmdNew(reg, baseDir, name); c != 0 {
 			return "", c, false
 		}
 		return name, 0, true

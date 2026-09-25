@@ -31,29 +31,24 @@ func TestFindClaudeNotFound(t *testing.T) {
 	}
 }
 
-func TestBuildEnvDefaultUnchanged(t *testing.T) {
-	base := []string{"FOO=bar"}
-	if got := BuildEnv(base, "", ""); !reflect.DeepEqual(got, base) {
-		t.Fatalf("default env should be unchanged, got %v", got)
+func TestBuildEnvDefaultStripsOnlySplitVars(t *testing.T) {
+	base := []string{"FOO=bar", "ANTHROPIC_API_KEY=k", "CLAUDE_CONFIG_DIR=/splits/old", "CLAUDE_CODE_OAUTH_TOKEN=old"}
+	got := BuildEnv(base, "")
+	want := []string{"FOO=bar", "ANTHROPIC_API_KEY=k"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
-func TestBuildEnvSplitSetsVarsAndStripsStale(t *testing.T) {
-	base := []string{"FOO=bar", "CLAUDE_CONFIG_DIR=/old", "CLAUDE_CODE_OAUTH_TOKEN=old"}
-	got := BuildEnv(base, "/splits/work", "tok123")
-	assertHas(t, got, "FOO=bar")
-	assertHas(t, got, "CLAUDE_CONFIG_DIR=/splits/work")
-	assertHas(t, got, "CLAUDE_CODE_OAUTH_TOKEN=tok123")
-	if count(got, "CLAUDE_CONFIG_DIR=") != 1 {
-		t.Fatalf("stale CLAUDE_CONFIG_DIR not stripped: %v", got)
+func TestBuildEnvSplitSetsDirAndStripsAuth(t *testing.T) {
+	base := []string{
+		"FOO=bar", "CLAUDE_CONFIG_DIR=/old", "CLAUDE_CODE_OAUTH_TOKEN=old",
+		"CLAUDE_CODE_OAUTH_REFRESH_TOKEN=r", "ANTHROPIC_API_KEY=k", "ANTHROPIC_AUTH_TOKEN=a",
 	}
-}
-
-func TestBuildEnvSplitWithoutToken(t *testing.T) {
-	got := BuildEnv([]string{"FOO=bar"}, "/splits/work", "")
-	assertHas(t, got, "CLAUDE_CONFIG_DIR=/splits/work")
-	if count(got, "CLAUDE_CODE_OAUTH_TOKEN=") != 0 {
-		t.Fatalf("should not set token when empty: %v", got)
+	got := BuildEnv(base, "/splits/work")
+	want := []string{"FOO=bar", "CLAUDE_CONFIG_DIR=/splits/work"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
@@ -63,22 +58,4 @@ func writeExec(t *testing.T, p string) {
 	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-}
-func assertHas(t *testing.T, env []string, want string) {
-	t.Helper()
-	for _, e := range env {
-		if e == want {
-			return
-		}
-	}
-	t.Fatalf("env missing %q: %v", want, env)
-}
-func count(env []string, prefix string) int {
-	n := 0
-	for _, e := range env {
-		if len(e) >= len(prefix) && e[:len(prefix)] == prefix {
-			n++
-		}
-	}
-	return n
 }

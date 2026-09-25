@@ -16,8 +16,12 @@ type Parsed struct {
 	DefaultSet bool
 	Rm         string
 	RmSet      bool
+	Login      string
+	LoginSet   bool
 	Which      bool
 	Purge      bool
+	Doctor     bool
+	Fix        bool
 
 	Passthrough []string
 }
@@ -27,12 +31,15 @@ var valueFlags = map[string]bool{
 	"--split-new":     true,
 	"--split-default": true,
 	"--split-rm":      true,
+	"--split-login":   true,
 }
 
 var boolFlags = map[string]bool{
-	"--split-list":  true,
-	"--split-which": true,
-	"--split-purge": true,
+	"--split-list":   true,
+	"--split-which":  true,
+	"--split-purge":  true,
+	"--split-doctor": true,
+	"--split-fix":    true,
 }
 
 // Parse partitions argv. Any argument that is not a recognized wrapper flag
@@ -67,6 +74,8 @@ func Parse(argv []string) (Parsed, error) {
 				p.Default, p.DefaultSet = val, true
 			case "--split-rm":
 				p.Rm, p.RmSet = val, true
+			case "--split-login":
+				p.Login, p.LoginSet = val, true
 			}
 		case boolFlags[name]:
 			if hasInline {
@@ -79,6 +88,10 @@ func Parse(argv []string) (Parsed, error) {
 				p.Which = true
 			case "--split-purge":
 				p.Purge = true
+			case "--split-doctor":
+				p.Doctor = true
+			case "--split-fix":
+				p.Fix = true
 			}
 		default:
 			p.Passthrough = append(p.Passthrough, arg)

@@ -76,4 +76,16 @@ func TestParseAllValueFlags(t *testing.T) {
 	if !p.Purge {
 		t.Fatal("expected Purge=true")
 	}
+	p, _ = Parse([]string{"--split-login", "d"})
+	if !p.LoginSet || p.Login != "d" {
+		t.Fatalf("Login=%q set=%v", p.Login, p.LoginSet)
+	}
+	p, _ = Parse([]string{"--split-doctor"})
+	if !p.Doctor {
+		t.Fatal("expected Doctor=true")
+	}
+	p, _ = Parse([]string{"--split-fix"})
+	if !p.Fix {
+		t.Fatal("expected Fix=true")
+	}
 }

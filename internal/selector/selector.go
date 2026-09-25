@@ -29,7 +29,7 @@ type Result struct {
 type Item struct {
 	Name   string // identifier returned on Pick
 	Label  string // display text
-	Status string // optional right-hand note (e.g. "ok", "no token")
+	Status string // optional right-hand note (e.g. the account)
 }
 
 type key int

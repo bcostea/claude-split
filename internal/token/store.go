@@ -1,18 +1,26 @@
+// Package token manages the legacy per-split tokens that older claude-split
+// versions minted with `claude setup-token`. Those tokens only have the
+// inference scope, so they break features that need the profile scope (for
+// example remote managed settings). Splits now use Claude Code's own login;
+// this package only finds and deletes the old tokens.
 package token
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 )
 
-// Store persists one auth token per split name.
+// Store lists and deletes legacy tokens, one per split name.
 type Store interface {
-	Save(name, token string) error
-	Load(name string) (string, error)
+	List() ([]string, error)
 	Delete(name string) error
 }
 
@@ -28,27 +36,24 @@ func New(baseDir string) Store {
 	return FileStore{BaseDir: baseDir}
 }
 
-// FileStore writes <BaseDir>/<name>/.token with 0600 perms.
+// FileStore keeps a token at <BaseDir>/<name>/.token.
 type FileStore struct{ BaseDir string }
 
 func (f FileStore) path(name string) string {
 	return filepath.Join(f.BaseDir, name, ".token")
 }
 
-func (f FileStore) Save(name, token string) error {
-	p := f.path(name)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(token), 0o600)
-}
-
-func (f FileStore) Load(name string) (string, error) {
-	b, err := os.ReadFile(f.path(name))
+func (f FileStore) List() ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(f.BaseDir, "*", ".token"))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(string(b)), nil
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
+		names = append(names, filepath.Base(filepath.Dir(m)))
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (f FileStore) Delete(name string) error {
@@ -65,19 +70,48 @@ const keychainService = "claude-split"
 // generic-password item (service=claude-split, account=<name>).
 type KeychainStore struct{}
 
-func (KeychainStore) Save(name, token string) error {
-	// -U updates the item if it already exists.
-	return exec.Command("security", "add-generic-password",
-		"-U", "-a", name, "-s", keychainService, "-w", token).Run()
+// List reads item attributes only; `dump-keychain` without -d never prints
+// secrets.
+func (KeychainStore) List() ([]string, error) {
+	out, err := exec.Command("security", "dump-keychain").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseKeychainDump(out), nil
 }
 
-func (KeychainStore) Load(name string) (string, error) {
-	out, err := exec.Command("security", "find-generic-password",
-		"-a", name, "-s", keychainService, "-w").Output()
-	if err != nil {
-		return "", err
+var (
+	acctRe = regexp.MustCompile(`^\s*"acct"<blob>="(.*)"\s*$`)
+	svceRe = regexp.MustCompile(`^\s*"svce"<blob>="(.*)"\s*$`)
+)
+
+// parseKeychainDump returns the account names of all items whose service is
+// claude-split.
+func parseKeychainDump(dump []byte) []string {
+	var names []string
+	var acct, svce string
+	flush := func() {
+		if svce == keychainService && acct != "" {
+			names = append(names, acct)
+		}
+		acct, svce = "", ""
 	}
-	return strings.TrimSpace(string(out)), nil
+	sc := bufio.NewScanner(bytes.NewReader(dump))
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "keychain: ") {
+			flush()
+			continue
+		}
+		if m := acctRe.FindStringSubmatch(line); m != nil {
+			acct = m[1]
+		} else if m := svceRe.FindStringSubmatch(line); m != nil {
+			svce = m[1]
+		}
+	}
+	flush()
+	sort.Strings(names)
+	return names
 }
 
 func (KeychainStore) Delete(name string) error {
